@@ -1,0 +1,8 @@
+{
+  "name": "AI Model Explorer",
+  "description": "Check the available AI models for any OpenAI or Anthropic compatible API endpoint.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
