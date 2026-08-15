@@ -78,6 +78,20 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Auto-redirect HTTP to HTTPS when behind reverse proxy or in production
+  app.enable("trust proxy");
+  app.use((req, res, next) => {
+    const proto = req.headers["x-forwarded-proto"];
+    const isHttp = proto ? proto === "http" : req.protocol === "http";
+    const host = req.headers.host || req.hostname;
+    const isLocalhost = host.includes("localhost") || host.includes("127.0.0.1") || host.includes("0.0.0.0");
+
+    if (process.env.NODE_ENV === "production" && isHttp && !isLocalhost) {
+      return res.redirect(301, `https://${host}${req.originalUrl || req.url}`);
+    }
+    next();
+  });
+
   app.use(express.json({ limit: "5mb" }));
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (err instanceof SyntaxError && "body" in err) {

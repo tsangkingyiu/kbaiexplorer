@@ -29,6 +29,13 @@ const CORS_HEADERS: Record<string, string> = {
 export default {
   async fetch(request: Request, env: Env, ctx: any): Promise<Response> {
     const url = new URL(request.url);
+
+    // Auto-redirect HTTP to HTTPS (excluding local development)
+    if (url.protocol === "http:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 301);
+    }
+
     const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
     // Handle CORS preflight for all endpoints
