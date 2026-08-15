@@ -490,6 +490,9 @@ function MainApp() {
     const cleanChatEndpoint = chatEndpoint.trim().startsWith("/") ? chatEndpoint.trim() : `/${chatEndpoint.trim()}`;
     const directUrl = `${baseUrl}${cleanChatEndpoint}`;
 
+    const testController = new AbortController();
+    const testTimeoutId = setTimeout(() => testController.abort(), 60000);
+
     try {
       let response: Response | null = null;
 
@@ -505,9 +508,10 @@ function MainApp() {
             apiKey: apiKey.trim(),
             prompt,
           }),
+          signal: testController.signal,
         });
       } catch (e) {
-        // network issue reaching proxy
+        // network issue reaching proxy or client abort
       }
 
       let data: any;
@@ -555,6 +559,7 @@ function MainApp() {
           method: "POST",
           headers,
           body: JSON.stringify(payload),
+          signal: testController.signal,
         });
 
         const directText = await directRes.text();
@@ -572,8 +577,13 @@ function MainApp() {
         setTestResponse({ ok: true, status: directRes.status, data: directJson });
       }
     } catch (err: any) {
-      setTestError(err.message || "An unexpected error occurred during model test.");
+      if (err.name === "AbortError") {
+        setTestError("Model test timed out after 60 seconds. The model endpoint took too long to generate a response.");
+      } else {
+        setTestError(err.message || "An unexpected error occurred during model test.");
+      }
     } finally {
+      clearTimeout(testTimeoutId);
       setIsTesting(false);
     }
   };
