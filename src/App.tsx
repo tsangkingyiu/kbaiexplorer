@@ -365,7 +365,7 @@ function MainApp() {
   };
 
   /**
-   * Fetch models through the server proxy
+   * Fetch models through the server proxy with resilient fallback
    */
   const fetchModels = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -383,18 +383,57 @@ function MainApp() {
     const fullTargetUrl = assembleFullUrl(protocol, targetHost, endpoint.trim() || "/v1/models");
 
     try {
-      const response = await fetch("/api/fetch-models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: fullTargetUrl, apiKey: apiKey.trim() }),
-      });
+      let response: Response | null = null;
+      let text = "";
 
-      const text = await response.text();
+      // 1. Try POST to proxy
+      try {
+        response = await fetch("/api/fetch-models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: fullTargetUrl, apiKey: apiKey.trim() }),
+        });
+      } catch (networkErr) {
+        // Network error reaching /api proxy
+      }
+
+      // 2. If 405 (Method Not Allowed) or 404 (Not Found), try GET to proxy
+      if (!response || response.status === 405 || response.status === 404) {
+        try {
+          const queryParams = new URLSearchParams({ url: fullTargetUrl });
+          if (apiKey.trim()) queryParams.set("apiKey", apiKey.trim());
+          response = await fetch(`/api/fetch-models?${queryParams.toString()}`, {
+            method: "GET",
+          });
+        } catch (e) {
+          // fallback
+        }
+      }
+
+      // 3. If proxy is still 405/404 or unavailable, attempt direct browser fetch
+      if (!response || response.status === 405 || response.status === 404) {
+        const directHeaders: Record<string, string> = {
+          "Accept": "application/json",
+        };
+        if (apiKey.trim()) {
+          directHeaders["Authorization"] = `Bearer ${apiKey.trim()}`;
+          directHeaders["x-api-key"] = apiKey.trim();
+        }
+        if (fullTargetUrl.includes("anthropic.com") || fullTargetUrl.includes("/v1/models")) {
+          directHeaders["anthropic-version"] = "2023-06-01";
+        }
+        response = await fetch(fullTargetUrl, {
+          method: "GET",
+          headers: directHeaders,
+        });
+      }
+
+      text = await response.text();
       let data: any;
       try {
         data = JSON.parse(text);
       } catch (err) {
-        throw new Error(`Server returned invalid JSON (Status ${response.status}): ${text.substring(0, 160)}`);
+        throw new Error(`Endpoint returned non-JSON response (Status ${response.status}): ${text.substring(0, 160)}`);
       }
 
       if (!response.ok) {
@@ -437,7 +476,7 @@ function MainApp() {
   };
 
   /**
-   * Run Test Model prompt through server proxy
+   * Run Test Model prompt through server proxy with fallback
    */
   const runTest = async () => {
     const targetHost = host.trim();
@@ -449,33 +488,89 @@ function MainApp() {
 
     const baseUrl = `${protocol}${targetHost.replace(/^https?:\/\//i, "").replace(/\/+$/, "")}`;
     const cleanChatEndpoint = chatEndpoint.trim().startsWith("/") ? chatEndpoint.trim() : `/${chatEndpoint.trim()}`;
+    const directUrl = `${baseUrl}${cleanChatEndpoint}`;
 
     try {
-      const response = await fetch("/api/test-model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          baseUrl,
-          chatEndpoint: cleanChatEndpoint,
-          model: testModelId,
-          apiKey: apiKey.trim(),
-          prompt,
-        }),
-      });
+      let response: Response | null = null;
+
+      // 1. Try POST to /api/test-model
+      try {
+        response = await fetch("/api/test-model", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseUrl,
+            chatEndpoint: cleanChatEndpoint,
+            model: testModelId,
+            apiKey: apiKey.trim(),
+            prompt,
+          }),
+        });
+      } catch (e) {
+        // network issue reaching proxy
+      }
 
       let data: any;
-      try {
-        data = await response.json();
-      } catch (e) {
-        throw new Error(`Failed to parse response (HTTP ${response.status})`);
-      }
 
-      if (!response.ok || !data?.ok) {
-        const errorMsg = data?.data?.error?.message || data?.error || `API returned status ${response.status}`;
-        throw new Error(errorMsg);
-      }
+      if (response && response.status !== 404 && response.status !== 405) {
+        try {
+          data = await response.json();
+        } catch (e) {
+          throw new Error(`Failed to parse response (HTTP ${response.status})`);
+        }
 
-      setTestResponse(data);
+        if (!response.ok || !data?.ok) {
+          const errorMsg = data?.data?.error?.message || data?.error || `API returned status ${response.status}`;
+          throw new Error(errorMsg);
+        }
+
+        setTestResponse(data);
+      } else {
+        // Direct test fallback
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        };
+        if (apiKey.trim()) {
+          headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+          headers["x-api-key"] = apiKey.trim();
+        }
+
+        let payload: any;
+        if (cleanChatEndpoint.includes("messages")) {
+          headers["anthropic-version"] = "2023-06-01";
+          payload = {
+            model: testModelId,
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+          };
+        } else {
+          payload = {
+            model: testModelId,
+            messages: [{ role: "user", content: prompt }],
+          };
+        }
+
+        const directRes = await fetch(directUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        const directText = await directRes.text();
+        let directJson;
+        try {
+          directJson = JSON.parse(directText);
+        } catch (e) {
+          throw new Error(`Endpoint returned status ${directRes.status}: ${directText.substring(0, 160)}`);
+        }
+
+        if (!directRes.ok) {
+          throw new Error(directJson?.error?.message || directJson?.error || `API error ${directRes.status}`);
+        }
+
+        setTestResponse({ ok: true, status: directRes.status, data: directJson });
+      }
     } catch (err: any) {
       setTestError(err.message || "An unexpected error occurred during model test.");
     } finally {

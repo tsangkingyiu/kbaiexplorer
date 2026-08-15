@@ -12,41 +12,55 @@ function normalizeUrl(inputUrl: string): string {
   return url;
 }
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE, HEAD",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version, *",
+};
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version",
-    },
+    headers: CORS_HEADERS,
   });
 }
 
-export async function onRequestPost(context: { request: Request }) {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version",
-  };
-
+async function handleFetchModels(request: Request) {
   try {
-    const body: any = await context.request.json();
-    const { url, apiKey } = body || {};
+    const reqUrl = new URL(request.url);
+    let targetUrlParam = "";
+    let apiKey = "";
 
-    if (!url || typeof url !== "string") {
+    if (request.method === "POST") {
+      try {
+        const body: any = await request.json();
+        targetUrlParam = body?.url || "";
+        apiKey = body?.apiKey || "";
+      } catch (e) {
+        // fallback to query params
+      }
+    }
+
+    if (!targetUrlParam) {
+      targetUrlParam = reqUrl.searchParams.get("url") || "";
+    }
+    if (!apiKey) {
+      apiKey = reqUrl.searchParams.get("apiKey") || request.headers.get("x-api-key") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+    }
+
+    if (!targetUrlParam || typeof targetUrlParam !== "string") {
       return new Response(JSON.stringify({ error: "API URL is required" }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
 
-    const normalizedUrl = normalizeUrl(url);
+    const normalizedUrl = normalizeUrl(targetUrlParam);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     };
 
     if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
@@ -61,7 +75,7 @@ export async function onRequestPost(context: { request: Request }) {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     const response = await fetch(normalizedUrl, {
       method: "GET",
@@ -80,7 +94,7 @@ export async function onRequestPost(context: { request: Request }) {
       }
       return new Response(JSON.stringify({ error: `API Error (HTTP ${response.status}): ${errorMessage}` }), {
         status: response.status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
 
@@ -90,24 +104,39 @@ export async function onRequestPost(context: { request: Request }) {
     } catch (e: any) {
       return new Response(JSON.stringify({ error: "The endpoint returned invalid JSON." }), {
         status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
 
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });
   } catch (error: any) {
     if (error.name === "AbortError") {
-      return new Response(JSON.stringify({ error: "Request timed out after 15 seconds." }), {
+      return new Response(JSON.stringify({ error: "Request timed out after 20 seconds." }), {
         status: 504,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify({ error: `Connection failed: ${error.message || "Failed to reach endpoint. Please check the URL or try Direct Browser Mode."}` }), {
+    return new Response(JSON.stringify({ error: `Connection failed: ${error.message || "Failed to reach endpoint."}` }), {
       status: 502,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });
   }
+}
+
+export async function onRequestPost(context: { request: Request }) {
+  return handleFetchModels(context.request);
+}
+
+export async function onRequestGet(context: { request: Request }) {
+  return handleFetchModels(context.request);
+}
+
+export async function onRequest(context: { request: Request }) {
+  if (context.request.method === "OPTIONS") {
+    return onRequestOptions();
+  }
+  return handleFetchModels(context.request);
 }

@@ -12,32 +12,41 @@ function normalizeUrl(inputUrl: string): string {
   return url;
 }
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE, HEAD",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version, *",
+};
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version",
-    },
+    headers: CORS_HEADERS,
   });
 }
 
-export async function onRequestPost(context: { request: Request }) {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version",
-  };
-
+async function handleTestModel(request: Request) {
   try {
-    const body: any = await context.request.json();
-    const { baseUrl, chatEndpoint, model, apiKey, prompt } = body || {};
+    const reqUrl = new URL(request.url);
+    let body: any = {};
+    if (request.method === "POST") {
+      try {
+        body = await request.json();
+      } catch (e) {
+        // fallback
+      }
+    }
+
+    const baseUrl = body.baseUrl || reqUrl.searchParams.get("baseUrl");
+    const chatEndpoint = body.chatEndpoint || reqUrl.searchParams.get("chatEndpoint") || "/v1/chat/completions";
+    const model = body.model || reqUrl.searchParams.get("model");
+    const apiKey = body.apiKey || reqUrl.searchParams.get("apiKey") || "";
+    const prompt = body.prompt || reqUrl.searchParams.get("prompt");
 
     if (!baseUrl || !chatEndpoint || !model || !prompt) {
       return new Response(JSON.stringify({ error: "Missing required fields" }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
 
@@ -48,7 +57,7 @@ export async function onRequestPost(context: { request: Request }) {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     };
 
     if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
@@ -74,7 +83,7 @@ export async function onRequestPost(context: { request: Request }) {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch(url, {
       method: "POST",
@@ -94,25 +103,40 @@ export async function onRequestPost(context: { request: Request }) {
         }),
         {
           status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         }
       );
     }
 
     return new Response(JSON.stringify({ ok: response.ok, status: response.status, data }), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });
   } catch (error: any) {
     if (error.name === "AbortError") {
-      return new Response(JSON.stringify({ error: "Request timed out after 20 seconds." }), {
+      return new Response(JSON.stringify({ error: "Request timed out after 25 seconds." }), {
         status: 504,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
     return new Response(JSON.stringify({ error: `Connection failed: ${error.message || "Failed to test model"}` }), {
       status: 502,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });
   }
+}
+
+export async function onRequestPost(context: { request: Request }) {
+  return handleTestModel(context.request);
+}
+
+export async function onRequestGet(context: { request: Request }) {
+  return handleTestModel(context.request);
+}
+
+export async function onRequest(context: { request: Request }) {
+  if (context.request.method === "OPTIONS") {
+    return onRequestOptions();
+  }
+  return handleTestModel(context.request);
 }

@@ -1,6 +1,6 @@
 /**
  * Cloudflare Worker Entry Point
- * Handles API routes (/api/fetch-models, /api/test-model) and serves static assets if available.
+ * Handles API routes (/api/fetch-models, /api/test-model) and serves static assets.
  */
 
 function normalizeUrl(inputUrl: string): string {
@@ -19,17 +19,19 @@ interface Env {
   ASSETS?: { fetch: (request: Request) => Promise<Response> };
 }
 
-const CORS_HEADERS = {
+const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE, HEAD",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, api-key, anthropic-version, *",
+  "Access-Control-Max-Age": "86400",
 };
 
 export default {
   async fetch(request: Request, env: Env, ctx: any): Promise<Response> {
     const url = new URL(request.url);
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
-    // Handle CORS preflight
+    // Handle CORS preflight for all endpoints
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -37,14 +39,31 @@ export default {
       });
     }
 
-    // Handle /api/fetch-models
-    if (url.pathname === "/api/fetch-models" && request.method === "POST") {
+    // Handle /api/fetch-models (POST or GET)
+    if (pathname === "/api/fetch-models" || pathname.endsWith("/api/fetch-models")) {
       try {
-        const body: any = await request.json();
-        const { url: rawUrl, apiKey } = body || {};
+        let rawUrl = "";
+        let apiKey = "";
+
+        if (request.method === "POST") {
+          try {
+            const body: any = await request.json();
+            rawUrl = body?.url || "";
+            apiKey = body?.apiKey || "";
+          } catch (e) {
+            // body parse fallback
+          }
+        }
+
+        if (!rawUrl) {
+          rawUrl = url.searchParams.get("url") || "";
+        }
+        if (!apiKey) {
+          apiKey = url.searchParams.get("apiKey") || request.headers.get("x-api-key") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+        }
 
         if (!rawUrl || typeof rawUrl !== "string") {
-          return new Response(JSON.stringify({ error: "API URL is required" }), {
+          return new Response(JSON.stringify({ error: "Target API URL is required (url parameter)" }), {
             status: 400,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
@@ -55,7 +74,7 @@ export default {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           "Accept": "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         };
 
         if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
@@ -70,7 +89,7 @@ export default {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
 
         const response = await fetch(targetUrl.trim(), {
           method: "GET",
@@ -83,11 +102,11 @@ export default {
         if (!response.ok) {
           let errorMessage = text;
           if (text.trim().startsWith("<")) {
-            errorMessage = `Received HTML status ${response.status} from endpoint. Make sure the URL points to a JSON API endpoint.`;
+            errorMessage = `Endpoint returned status ${response.status} with HTML instead of JSON. Ensure the domain and path are correct.`;
           } else if (text.length > 300) {
             errorMessage = text.substring(0, 300) + "...";
           }
-          return new Response(JSON.stringify({ error: `API Error (HTTP ${response.status}): ${errorMessage}` }), {
+          return new Response(JSON.stringify({ error: `API Error (${response.status}): ${errorMessage}` }), {
             status: response.status,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
@@ -97,7 +116,7 @@ export default {
         try {
           data = JSON.parse(text);
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: "The endpoint returned invalid JSON." }), {
+          return new Response(JSON.stringify({ error: "The remote endpoint returned invalid JSON." }), {
             status: 500,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
@@ -109,26 +128,38 @@ export default {
         });
       } catch (err: any) {
         if (err.name === "AbortError") {
-          return new Response(JSON.stringify({ error: "Request timed out after 15 seconds." }), {
+          return new Response(JSON.stringify({ error: "Request timed out after 20 seconds." }), {
             status: 504,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
         }
-        return new Response(JSON.stringify({ error: `Connection error: ${err.message || "Failed to fetch models"}` }), {
+        return new Response(JSON.stringify({ error: `Connection failed: ${err.message || "Failed to reach endpoint."}` }), {
           status: 502,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         });
       }
     }
 
-    // Handle /api/test-model
-    if (url.pathname === "/api/test-model" && request.method === "POST") {
+    // Handle /api/test-model (POST or GET)
+    if (pathname === "/api/test-model" || pathname.endsWith("/api/test-model")) {
       try {
-        const body: any = await request.json();
-        const { baseUrl, chatEndpoint, model, apiKey, prompt } = body || {};
+        let body: any = {};
+        if (request.method === "POST") {
+          try {
+            body = await request.json();
+          } catch (e) {
+            // fallback
+          }
+        }
+
+        const baseUrl = body.baseUrl || url.searchParams.get("baseUrl");
+        const chatEndpoint = body.chatEndpoint || url.searchParams.get("chatEndpoint") || "/v1/chat/completions";
+        const model = body.model || url.searchParams.get("model");
+        const apiKey = body.apiKey || url.searchParams.get("apiKey") || "";
+        const prompt = body.prompt || url.searchParams.get("prompt");
 
         if (!baseUrl || !chatEndpoint || !model || !prompt) {
-          return new Response(JSON.stringify({ error: "Missing required fields" }), {
+          return new Response(JSON.stringify({ error: "Missing required fields (baseUrl, chatEndpoint, model, prompt)" }), {
             status: 400,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
@@ -141,7 +172,7 @@ export default {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           "Accept": "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         };
 
         if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
@@ -167,7 +198,7 @@ export default {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
 
         const response = await fetch(targetUrl, {
           method: "POST",
@@ -183,7 +214,7 @@ export default {
         } catch (e: any) {
           return new Response(
             JSON.stringify({
-              error: `The endpoint returned invalid JSON. Status: ${response.status}. Preview: ${text.substring(0, 200)}`,
+              error: `The endpoint returned non-JSON response. Status: ${response.status}. Preview: ${text.substring(0, 200)}`,
             }),
             {
               status: 500,
@@ -198,7 +229,7 @@ export default {
         });
       } catch (err: any) {
         if (err.name === "AbortError") {
-          return new Response(JSON.stringify({ error: "Request timed out after 20 seconds." }), {
+          return new Response(JSON.stringify({ error: "Request timed out after 25 seconds." }), {
             status: 504,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
