@@ -25,7 +25,7 @@ function formatFetchError(error: any, urlString: string): { status: number; mess
   if (error.name === "AbortError") {
     return {
       status: 504,
-      message: `Request timed out connecting to ${hostname || "endpoint"}. The server took too long to respond (> 60s).`,
+      message: `Request timed out connecting to ${hostname || "endpoint"}. The server took too long to respond (> 180s).`,
     };
   }
 
@@ -199,7 +199,7 @@ async function startServer() {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 180000);
 
       const response = await fetch(url, {
         method: "POST",

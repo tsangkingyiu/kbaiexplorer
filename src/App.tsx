@@ -491,7 +491,7 @@ function MainApp() {
     const directUrl = `${baseUrl}${cleanChatEndpoint}`;
 
     const testController = new AbortController();
-    const testTimeoutId = setTimeout(() => testController.abort(), 60000);
+    const testTimeoutId = setTimeout(() => testController.abort(), 180000);
 
     try {
       let response: Response | null = null;
@@ -578,7 +578,7 @@ function MainApp() {
       }
     } catch (err: any) {
       if (err.name === "AbortError") {
-        setTestError("Model test timed out after 60 seconds. The model endpoint took too long to generate a response.");
+        setTestError("Model test timed out after 180 seconds. The model endpoint took too long to generate a response.");
       } else {
         setTestError(err.message || "An unexpected error occurred during model test.");
       }

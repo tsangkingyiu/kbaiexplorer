@@ -83,7 +83,7 @@ async function handleTestModel(request: Request) {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
 
     const response = await fetch(url, {
       method: "POST",
@@ -114,7 +114,7 @@ async function handleTestModel(request: Request) {
     });
   } catch (error: any) {
     if (error.name === "AbortError") {
-      return new Response(JSON.stringify({ error: "Request timed out after 60 seconds." }), {
+      return new Response(JSON.stringify({ error: "Request timed out after 180 seconds." }), {
         status: 504,
         headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
