@@ -2,6 +2,78 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 
+function normalizeUrl(inputUrl: string): string {
+  let url = inputUrl.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    if (url.startsWith("localhost") || url.startsWith("127.0.0.1") || url.startsWith("0.0.0.0")) {
+      url = `http://${url}`;
+    } else {
+      url = `https://${url}`;
+    }
+  }
+  return url;
+}
+
+function formatFetchError(error: any, urlString: string): { status: number; message: string } {
+  let hostname = "";
+  try {
+    hostname = new URL(normalizeUrl(urlString)).hostname;
+  } catch (e) {
+    hostname = urlString;
+  }
+
+  if (error.name === "AbortError") {
+    return {
+      status: 504,
+      message: `Request timed out connecting to ${hostname || "endpoint"}. The server took too long to respond (> 15s).`,
+    };
+  }
+
+  const cause = error.cause;
+  const causeCode = cause?.code || error.code || "";
+  const causeMsg = cause?.message || error.message || "";
+
+  if (causeCode === "ENOTFOUND" || causeMsg.includes("ENOTFOUND") || causeMsg.includes("getaddrinfo")) {
+    return {
+      status: 502,
+      message: `Could not resolve domain "${hostname}" (DNS ENOTFOUND). Please verify the domain spelling and ensure it is accessible on the public Internet.`,
+    };
+  }
+
+  if (causeCode === "ECONNREFUSED" || causeMsg.includes("ECONNREFUSED")) {
+    return {
+      status: 502,
+      message: `Connection refused at ${hostname}. The service is not running or not listening on this port.`,
+    };
+  }
+
+  if (causeCode === "ETIMEDOUT" || causeMsg.includes("ETIMEDOUT")) {
+    return {
+      status: 504,
+      message: `Connection timed out connecting to ${hostname}.`,
+    };
+  }
+
+  if (causeCode === "ECONNRESET" || causeMsg.includes("ECONNRESET")) {
+    return {
+      status: 502,
+      message: `Connection was reset by ${hostname}.`,
+    };
+  }
+
+  if (causeMsg.includes("unable to verify") || causeMsg.includes("CERT_") || causeCode.includes("CERT_")) {
+    return {
+      status: 502,
+      message: `SSL/TLS certificate error connecting to ${hostname}: ${causeMsg}`,
+    };
+  }
+
+  return {
+    status: 500,
+    message: `Connection failed to ${hostname || "server"}: ${causeMsg || error.message || "Unknown network error"}`,
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -20,6 +92,8 @@ async function startServer() {
       return res.status(400).json({ error: "API URL is required" });
     }
 
+    const normalizedUrl = normalizeUrl(url);
+
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -34,14 +108,14 @@ async function startServer() {
         headers["api-key"] = key;
       }
 
-      if (url.includes("anthropic.com") || url.includes("/v1/models")) {
+      if (normalizedUrl.includes("anthropic.com") || normalizedUrl.includes("/v1/models")) {
         headers["anthropic-version"] = "2023-06-01";
       }
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-      const response = await fetch(url.trim(), {
+      const response = await fetch(normalizedUrl, {
         method: "GET",
         headers,
         signal: controller.signal,
@@ -77,14 +151,9 @@ async function startServer() {
 
       res.json(data);
     } catch (error: any) {
-      console.error("Fetch models error:", error);
-      if (error.name === "AbortError") {
-        return res.status(504).json({ error: "Request timed out after 15 seconds. Please check the URL or your network." });
-      }
-      const msg = error.cause?.message || error.message || "Failed to fetch models. Check the URL and try again.";
-      res.status(500).json({ 
-        error: `Connection error: ${msg}` 
-      });
+      const { status, message } = formatFetchError(error, normalizedUrl);
+      console.warn(`[Proxy Warning] /api/fetch-models: ${message}`);
+      res.status(status).json({ error: message });
     }
   });
 
@@ -94,9 +163,11 @@ async function startServer() {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const cleanBase = normalizeUrl(baseUrl).replace(/\/$/, "");
+    const cleanEndpoint = chatEndpoint.trim().startsWith("/") ? chatEndpoint.trim() : "/" + chatEndpoint.trim();
+    const url = `${cleanBase}${cleanEndpoint}`;
+
     try {
-      const url = `${baseUrl.trim().replace(/\/$/, "")}${chatEndpoint.trim().startsWith("/") ? chatEndpoint.trim() : "/" + chatEndpoint.trim()}`;
-      
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -154,13 +225,10 @@ async function startServer() {
       
       res.json({ ok: response.ok, status: response.status, data });
     } catch (error: any) {
-      console.error("Test model error:", error);
-      if (error.name === "AbortError") {
-        return res.status(504).json({ error: "Request timed out after 20 seconds." });
-      }
-      const msg = error.cause?.message || error.message || "Failed to test model. Check the URL and try again.";
-      res.status(500).json({ 
-        error: `Test failed: ${msg}` 
+      const { status, message } = formatFetchError(error, url);
+      console.warn(`[Proxy Warning] /api/test-model: ${message}`);
+      res.status(status).json({ 
+        error: `Test failed: ${message}` 
       });
     }
   });

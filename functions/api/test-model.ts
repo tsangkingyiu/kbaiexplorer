@@ -1,4 +1,17 @@
 // Cloudflare Pages / Workers Function for /api/test-model
+
+function normalizeUrl(inputUrl: string): string {
+  let url = inputUrl.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    if (url.startsWith("localhost") || url.startsWith("127.0.0.1") || url.startsWith("0.0.0.0")) {
+      url = `http://${url}`;
+    } else {
+      url = `https://${url}`;
+    }
+  }
+  return url;
+}
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -28,7 +41,7 @@ export async function onRequestPost(context: { request: Request }) {
       });
     }
 
-    const cleanBase = String(baseUrl).trim().replace(/\/$/, "");
+    const cleanBase = normalizeUrl(String(baseUrl)).replace(/\/$/, "");
     const cleanEndpoint = String(chatEndpoint).trim().startsWith("/") ? String(chatEndpoint).trim() : `/${String(chatEndpoint).trim()}`;
     const url = `${cleanBase}${cleanEndpoint}`;
 
@@ -97,8 +110,8 @@ export async function onRequestPost(context: { request: Request }) {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify({ error: `Worker test failed: ${error.message || "Failed to test model"}` }), {
-      status: 500,
+    return new Response(JSON.stringify({ error: `Connection failed: ${error.message || "Failed to test model"}` }), {
+      status: 502,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

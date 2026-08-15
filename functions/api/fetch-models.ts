@@ -1,4 +1,17 @@
 // Cloudflare Pages / Workers Function for /api/fetch-models
+
+function normalizeUrl(inputUrl: string): string {
+  let url = inputUrl.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    if (url.startsWith("localhost") || url.startsWith("127.0.0.1") || url.startsWith("0.0.0.0")) {
+      url = `http://${url}`;
+    } else {
+      url = `https://${url}`;
+    }
+  }
+  return url;
+}
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -28,6 +41,8 @@ export async function onRequestPost(context: { request: Request }) {
       });
     }
 
+    const normalizedUrl = normalizeUrl(url);
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
@@ -41,14 +56,14 @@ export async function onRequestPost(context: { request: Request }) {
       headers["api-key"] = key;
     }
 
-    if (url.includes("anthropic.com") || url.includes("/v1/models")) {
+    if (normalizedUrl.includes("anthropic.com") || normalizedUrl.includes("/v1/models")) {
       headers["anthropic-version"] = "2023-06-01";
     }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    const response = await fetch(url.trim(), {
+    const response = await fetch(normalizedUrl, {
       method: "GET",
       headers,
       signal: controller.signal,
@@ -90,8 +105,8 @@ export async function onRequestPost(context: { request: Request }) {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify({ error: `Worker error: ${error.message || "Failed to fetch models"}` }), {
-      status: 500,
+    return new Response(JSON.stringify({ error: `Connection failed: ${error.message || "Failed to reach endpoint. Please check the URL or try Direct Browser Mode."}` }), {
+      status: 502,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

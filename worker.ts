@@ -3,6 +3,18 @@
  * Handles API routes (/api/fetch-models, /api/test-model) and serves static assets if available.
  */
 
+function normalizeUrl(inputUrl: string): string {
+  let url = inputUrl.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    if (url.startsWith("localhost") || url.startsWith("127.0.0.1") || url.startsWith("0.0.0.0")) {
+      url = `http://${url}`;
+    } else {
+      url = `https://${url}`;
+    }
+  }
+  return url;
+}
+
 interface Env {
   ASSETS?: { fetch: (request: Request) => Promise<Response> };
 }
@@ -29,14 +41,16 @@ export default {
     if (url.pathname === "/api/fetch-models" && request.method === "POST") {
       try {
         const body: any = await request.json();
-        const { url: targetUrl, apiKey } = body || {};
+        const { url: rawUrl, apiKey } = body || {};
 
-        if (!targetUrl || typeof targetUrl !== "string") {
+        if (!rawUrl || typeof rawUrl !== "string") {
           return new Response(JSON.stringify({ error: "API URL is required" }), {
             status: 400,
             headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
           });
         }
+
+        const targetUrl = normalizeUrl(rawUrl);
 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
@@ -94,8 +108,14 @@ export default {
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         });
       } catch (err: any) {
-        return new Response(JSON.stringify({ error: `Worker error: ${err.message || "Failed to fetch models"}` }), {
-          status: 500,
+        if (err.name === "AbortError") {
+          return new Response(JSON.stringify({ error: "Request timed out after 15 seconds." }), {
+            status: 504,
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ error: `Connection error: ${err.message || "Failed to fetch models"}` }), {
+          status: 502,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         });
       }
@@ -114,7 +134,7 @@ export default {
           });
         }
 
-        const cleanBase = String(baseUrl).trim().replace(/\/$/, "");
+        const cleanBase = normalizeUrl(String(baseUrl)).replace(/\/$/, "");
         const cleanEndpoint = String(chatEndpoint).trim().startsWith("/") ? String(chatEndpoint).trim() : `/${String(chatEndpoint).trim()}`;
         const targetUrl = `${cleanBase}${cleanEndpoint}`;
 
@@ -177,18 +197,24 @@ export default {
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         });
       } catch (err: any) {
-        return new Response(JSON.stringify({ error: `Worker test error: ${err.message || "Failed to test model"}` }), {
-          status: 500,
+        if (err.name === "AbortError") {
+          return new Response(JSON.stringify({ error: "Request timed out after 20 seconds." }), {
+            status: 504,
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ error: `Test connection error: ${err.message || "Failed to test model"}` }), {
+          status: 502,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         });
       }
     }
 
-    // Serve static assets in Cloudflare Pages / Workers Sites
-    if (env.ASSETS) {
+    // Static asset serving if worker is bound to ASSETS
+    if (env && env.ASSETS) {
       return env.ASSETS.fetch(request);
     }
 
-    return new Response("Not Found", { status: 404 });
+    return new Response("Not found", { status: 404 });
   },
 };
