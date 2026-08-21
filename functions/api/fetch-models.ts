@@ -63,14 +63,16 @@ async function handleFetchModels(request: Request) {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     };
 
+    const isAnthropic = normalizedUrl.toLowerCase().includes("anthropic.com");
     if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
       const key = apiKey.trim();
       headers["Authorization"] = `Bearer ${key}`;
-      headers["x-api-key"] = key;
-      headers["api-key"] = key;
+      if (isAnthropic) {
+        headers["x-api-key"] = key;
+      }
     }
 
-    if (normalizedUrl.includes("anthropic.com") || normalizedUrl.includes("/v1/models")) {
+    if (isAnthropic) {
       headers["anthropic-version"] = "2023-06-01";
     }
 

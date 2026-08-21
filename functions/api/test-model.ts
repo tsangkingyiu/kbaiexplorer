@@ -60,15 +60,17 @@ async function handleTestModel(request: Request) {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     };
 
+    const isAnthropic = url.toLowerCase().includes("anthropic.com") || cleanEndpoint.includes("messages");
     if (apiKey && typeof apiKey === "string" && apiKey.trim()) {
       const key = apiKey.trim();
       headers["Authorization"] = `Bearer ${key}`;
-      headers["x-api-key"] = key;
-      headers["api-key"] = key;
+      if (isAnthropic) {
+        headers["x-api-key"] = key;
+      }
     }
 
     let payload: any;
-    if (chatEndpoint.includes("messages")) {
+    if (cleanEndpoint.includes("messages") || isAnthropic) {
       headers["anthropic-version"] = "2023-06-01";
       payload = {
         model,

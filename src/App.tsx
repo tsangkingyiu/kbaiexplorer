@@ -163,22 +163,41 @@ async function safeCopyText(text: string): Promise<boolean> {
 }
 
 function assembleFullUrl(proto: Protocol, hostInput: string, endpointInput: string): string {
-  let cleanHost = hostInput.trim();
-  // Strip protocol if user inadvertently pasted it into the host input
-  if (/^https?:\/\//i.test(cleanHost)) {
-    cleanHost = cleanHost.replace(/^https?:\/\//i, "");
+  let raw = hostInput.trim();
+  let selectedProto = proto;
+  
+  if (/^https?:\/\//i.test(raw)) {
+    const match = raw.match(/^(https?:\/\/)/i);
+    if (match) selectedProto = match[1].toLowerCase() as Protocol;
+    raw = raw.replace(/^https?:\/\//i, "");
   }
-  cleanHost = cleanHost.replace(/\/+$/, "");
 
-  let cleanEndpoint = endpointInput.trim();
-  if (!cleanEndpoint) {
-    cleanEndpoint = "/v1/models";
-  }
+  // Extract hostname and path if user pasted host with path
+  const [hostPart, ...pathParts] = raw.split("/");
+  let hostPath = pathParts.length > 0 ? "/" + pathParts.join("/") : "";
+  hostPath = hostPath.replace(/\/+$/, "");
+
+  let cleanEndpoint = (endpointInput || "").trim();
   if (!cleanEndpoint.startsWith("/")) {
-    cleanEndpoint = `/${cleanEndpoint}`;
+    cleanEndpoint = cleanEndpoint ? `/${cleanEndpoint}` : "/v1/models";
   }
 
-  return `${proto}${cleanHost}${cleanEndpoint}`;
+  let finalPath = "";
+  if (hostPath) {
+    if (hostPath.endsWith(cleanEndpoint)) {
+      finalPath = hostPath;
+    } else if (cleanEndpoint.startsWith(hostPath)) {
+      finalPath = cleanEndpoint;
+    } else if (hostPath.endsWith("/v1") && cleanEndpoint.startsWith("/v1/")) {
+      finalPath = hostPath + cleanEndpoint.substring(3);
+    } else {
+      finalPath = hostPath + (cleanEndpoint === "/v1/models" ? "" : cleanEndpoint);
+    }
+  } else {
+    finalPath = cleanEndpoint;
+  }
+
+  return `${selectedProto}${hostPart}${finalPath}`;
 }
 
 function ModelCard({ model, onTest }: { model: AIModel; onTest: (id: string) => void }) {
@@ -356,6 +375,28 @@ function MainApp() {
     setError(null);
   };
 
+  const handleHostChange = (val: string) => {
+    let input = val.trim();
+    if (/^https?:\/\//i.test(input)) {
+      const match = input.match(/^(https?:\/\/)/i);
+      if (match) {
+        setProtocol(match[1].toLowerCase() as Protocol);
+      }
+      input = input.replace(/^https?:\/\//i, "");
+      const slashIdx = input.indexOf("/");
+      if (slashIdx !== -1) {
+        const hostPart = input.substring(0, slashIdx);
+        const pathPart = input.substring(slashIdx);
+        setHost(hostPart);
+        if (pathPart) {
+          setEndpoint(pathPart);
+        }
+        return;
+      }
+    }
+    setHost(val);
+  };
+
   const clearForm = () => {
     setHost("");
     setEndpoint("/v1/models");
@@ -412,14 +453,17 @@ function MainApp() {
 
       // 3. If proxy is still 405/404 or unavailable, attempt direct browser fetch
       if (!response || response.status === 405 || response.status === 404) {
+        const isAnthropic = fullTargetUrl.toLowerCase().includes("anthropic.com");
         const directHeaders: Record<string, string> = {
           "Accept": "application/json",
         };
         if (apiKey.trim()) {
           directHeaders["Authorization"] = `Bearer ${apiKey.trim()}`;
-          directHeaders["x-api-key"] = apiKey.trim();
+          if (isAnthropic) {
+            directHeaders["x-api-key"] = apiKey.trim();
+          }
         }
-        if (fullTargetUrl.includes("anthropic.com") || fullTargetUrl.includes("/v1/models")) {
+        if (isAnthropic) {
           directHeaders["anthropic-version"] = "2023-06-01";
         }
         response = await fetch(fullTargetUrl, {
@@ -531,17 +575,20 @@ function MainApp() {
         setTestResponse(data);
       } else {
         // Direct test fallback
+        const isAnthropic = directUrl.toLowerCase().includes("anthropic.com") || cleanChatEndpoint.includes("messages");
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           "Accept": "application/json",
         };
         if (apiKey.trim()) {
           headers["Authorization"] = `Bearer ${apiKey.trim()}`;
-          headers["x-api-key"] = apiKey.trim();
+          if (isAnthropic) {
+            headers["x-api-key"] = apiKey.trim();
+          }
         }
 
         let payload: any;
-        if (cleanChatEndpoint.includes("messages")) {
+        if (cleanChatEndpoint.includes("messages") || isAnthropic) {
           headers["anthropic-version"] = "2023-06-01";
           payload = {
             model: testModelId,
@@ -754,7 +801,7 @@ function MainApp() {
                       className="block w-full px-3 py-3 bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none sm:text-sm font-mono"
                       placeholder="api.openai.com"
                       value={host}
-                      onChange={(e) => setHost(e.target.value)}
+                      onChange={(e) => handleHostChange(e.target.value)}
                     />
                   </div>
 
